@@ -1,0 +1,34 @@
+
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <title>Student Report Delivery</title>
+  <link rel="stylesheet" href="/static/css/style.css">
+</head>
+<body>
+  <div class="container">
+    <h1>Student Report Delivery</h1>
+    <p>Upload the teacher's CSV or Excel file. The app will generate bilingual (English+Urdu) PDFs for each student and attempt to send email/WhatsApp when configured.</p>
+    <form action="/upload" method="post" enctype="multipart/form-data">
+      <div>
+        <label for="file">Select CSV or Excel file:</label>
+        <input type="file" name="file" id="file" accept=".csv, .xls, .xlsx" required>
+      </div>
+      <div>
+        <button type="submit">Upload & Process</button>
+      </div>
+    </form>
+
+    <h3>Sample file</h3>
+    <p>You can test with <a href="/static/sample_students.csv" target="_blank">sample_students.csv</a>.</p>
+
+    <hr>
+    <h4>Notes</h4>
+    <ul>
+      <li>If SendGrid/Twilio not configured, the app will still generate PDFs and a ZIP for manual distribution.</li>
+      <li>Make sure to install <strong>wkhtmltopdf</strong> and set WKHTMLTOPDF_PATH environment variable if needed.</li>
+    </ul>
+  </div>
+</body>
+</html>

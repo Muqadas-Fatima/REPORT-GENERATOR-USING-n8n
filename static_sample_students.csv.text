@@ -1,0 +1,7 @@
+
+Student ID,Student Name,English Obtained/100,Urdu Obtained/100,Maths Obtained/100,Science Obtained/100,Computer Obtained/100,History Obtained/100,Geography Obtained/100,Total Obtained/700,Percentage,Phone no,Email
+S001,Ali Khan,78,85,90,76,88,72,68,557,79.57%,+923001234567,ali.parent@example.com
+S002,Sara Ahmed,65,72,80,69,74,70,68,498,71.14%,+923001234568,sara.parent@example.com
+S003,Hamza Raza,88,91,84,79,82,80,78,582,83.14%,+923001234569,hamza.parent@example.com
+S004,Ayesha Noor,70,68,75,73,71,69,65,491,70.14%,+923001234570,ayesha.parent@example.com
+S005,Bilal Hussain,92,87,95,89,90,85,84,622,88.86%,+923001234571,bilal.parent@example.com

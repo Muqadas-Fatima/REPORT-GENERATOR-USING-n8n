@@ -1,0 +1,298 @@
+
+import os
+import io
+import csv
+import base64
+import zipfile
+import datetime
+from pathlib import Path
+from flask import Flask, request, render_template, send_file, redirect, url_for, flash
+import pandas as pd
+import pdfkit
+import requests
+import smtplib
+from email.message import EmailMessage
+from twilio.rest import Client
+from dotenv import load_dotenv
+
+load_dotenv()
+
+app = Flask(__name__)
+app.secret_key = os.environ.get("FLASK_SECRET", "change-me")
+
+# Config
+WKHTMLTOPDF_PATH = os.environ.get("WKHTMLTOPDF_PATH", None)
+MAILGUN_API_KEY = os.environ.get("MAILGUN_API_KEY")
+MAILGUN_DOMAIN = os.environ.get("MAILGUN_DOMAIN")  # e.g. sandboxXXX.mailgun.org or your domain
+SMTP_HOST = os.environ.get("SMTP_HOST")
+SMTP_PORT = int(os.environ.get("SMTP_PORT", 587))
+SMTP_USER = os.environ.get("SMTP_USER")
+SMTP_PASS = os.environ.get("SMTP_PASS")
+SMTP_USE_TLS = os.environ.get("SMTP_USE_TLS", "true").lower() in ("1","true","yes")
+FROM_EMAIL = os.environ.get("FROM_EMAIL")
+TWILIO_SID = os.environ.get("TWILIO_ACCOUNT_SID")
+TWILIO_TOKEN = os.environ.get("TWILIO_AUTH_TOKEN")
+TWILIO_WHATSAPP_FROM = os.environ.get("TWILIO_WHATSAPP_FROM")  # e.g. "whatsapp:+1415xxxxxxx"
+SCHOOL_NAME = os.environ.get("SCHOOL_NAME", "Your School")
+SCHOOL_LOGO_URL = os.environ.get("SCHOOL_LOGO_URL", "")
+
+OUTPUT_DIR = Path("output")
+PDF_DIR = OUTPUT_DIR / "pdfs"
+OUTPUT_DIR.mkdir(exist_ok=True)
+PDF_DIR.mkdir(exist_ok=True)
+
+
+def pdfkit_config():
+    if WKHTMLTOPDF_PATH:
+        return pdfkit.configuration(wkhtmltopdf=WKHTMLTOPDF_PATH)
+    return None
+
+
+def map_columns(df):
+    def find(keys):
+        for k in keys:
+            for c in df.columns:
+                if k.lower() in c.lower():
+                    return c
+        return None
+
+    mapping = {
+        "student_id": find(["student id", "id"]),
+        "student_name": find(["student name", "name"]),
+        "english": find(["english"]),
+        "urdu": find(["urdu"]),
+        "maths": find(["math", "maths", "mathematics"]),
+        "science": find(["science"]),
+        "computer": find(["computer"]),
+        "history": find(["history"]),
+        "geography": find(["geography"]),
+        "total": find(["total obtained", "total"]),
+        "percentage": find(["percentage"]),
+        "phone": find(["phone", "mobile", "phone no"]),
+        "email": find(["email", "e-mail"])
+    }
+    return mapping
+
+
+def safe_get(row, col):
+    if col is None:
+        return ""
+    v = row.get(col, "")
+    if pd.isna(v):
+        return ""
+    return str(v).strip()
+
+
+def send_email_mailgun(api_key, domain, from_email, to_email, subject, html_body, attachment_path=None):
+    url = f"https://api.mailgun.net/v3/{domain}/messages"
+    auth = ("api", api_key)
+    data = {
+        "from": from_email,
+        "to": to_email,
+        "subject": subject,
+        "html": html_body
+    }
+    files = None
+    if attachment_path and os.path.exists(attachment_path):
+        files = [("attachment", (os.path.basename(attachment_path), open(attachment_path, "rb")))]
+    resp = requests.post(url, auth=auth, data=data, files=files)
+    return resp.status_code, resp.text
+
+
+def send_email_smtp(host, port, user, password, use_tls, from_email, to_email, subject, html_body, attachment_path=None):
+    msg = EmailMessage()
+    msg["Subject"] = subject
+    msg["From"] = from_email
+    msg["To"] = to_email
+    msg.set_content("This is a multi-part message in MIME format.")
+    msg.add_alternative(html_body, subtype="html")
+    if attachment_path and os.path.exists(attachment_path):
+        with open(attachment_path, "rb") as f:
+            data = f.read()
+        msg.add_attachment(data, maintype="application", subtype="pdf", filename=os.path.basename(attachment_path))
+
+    with smtplib.SMTP(host, port, timeout=30) as server:
+        if use_tls:
+            server.starttls()
+        if user and password:
+            server.login(user, password)
+        server.send_message(msg)
+
+
+@app.route("/", methods=["GET"])
+def index():
+    return render_template("index.html")
+
+
+@app.route("/upload", methods=["POST"])
+def upload():
+    file = request.files.get("file")
+    if not file:
+        flash("No file uploaded", "danger")
+        return redirect(url_for("index"))
+    # Read into pandas
+    filename = file.filename.lower()
+    try:
+        if filename.endswith(".csv"):
+            df = pd.read_csv(file)
+        else:
+            df = pd.read_excel(file)
+    except Exception as e:
+        flash(f"Failed to read file: {e}", "danger")
+        return redirect(url_for("index"))
+
+    mapping = map_columns(df)
+    timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+    run_pdf_dir = PDF_DIR / f"run_{timestamp}"
+    run_pdf_dir.mkdir(parents=True, exist_ok=True)
+
+    twilio_client = Client(TWILIO_SID, TWILIO_TOKEN) if TWILIO_SID and TWILIO_TOKEN else None
+    config = pdfkit_config()
+
+    results = []
+
+    for idx, row in df.iterrows():
+        sid = safe_get(row, mapping["student_id"]) or f"row{idx+1}"
+        name = safe_get(row, mapping["student_name"]) or "Student"
+        subjects = {
+            "English": safe_get(row, mapping["english"]),
+            "Urdu": safe_get(row, mapping["urdu"]),
+            "Maths": safe_get(row, mapping["maths"]),
+            "Science": safe_get(row, mapping["science"]),
+            "Computer": safe_get(row, mapping["computer"]),
+            "History": safe_get(row, mapping["history"]),
+            "Geography": safe_get(row, mapping["geography"])
+        }
+        # Convert marks to numbers where possible
+        obtained_vals = []
+        for k, v in subjects.items():
+            try:
+                num = float(str(v))
+                obtained_vals.append(num)
+                subjects[k] = int(num) if num.is_integer() else num
+            except:
+                subjects[k] = v
+        # Compute total/percentage if missing
+        total_col = mapping["total"]
+        perc_col = mapping["percentage"]
+        try:
+            total_obtained = float(safe_get(row, total_col)) if total_col else None
+        except:
+            total_obtained = None
+        if total_obtained in (None, ""):
+            total_obtained = sum([v for v in obtained_vals]) if obtained_vals else 0
+        total_max = 700  # 7 subjects × 100
+        try:
+            percentage = float(safe_get(row, perc_col).replace("%", "")) if perc_col else None
+        except:
+            percentage = None
+        if not percentage:
+            percentage = round((total_obtained / total_max) * 100, 2) if total_max else 0
+
+        phone = safe_get(row, mapping["phone"])
+        email = safe_get(row, mapping["email"])
+
+        student = {
+            "student_id": sid,
+            "student_name": name,
+            "subjects": subjects,
+            "total_obtained": int(total_obtained) if float(total_obtained).is_integer() else round(total_obtained,2),
+            "total_max": total_max,
+            "percentage": f"{percentage}%",
+            "phone": phone,
+            "email": email
+        }
+
+        # Render PDF
+        html = render_template("report.html", student=student, school_name=SCHOOL_NAME, logo_url=SCHOOL_LOGO_URL)
+        pdf_path = str(run_pdf_dir / f"{sid}_{name.replace(' ', '_')}.pdf")
+        try:
+            pdfkit.from_string(html, pdf_path, configuration=config)
+            pdf_status = "generated"
+        except Exception as e:
+            pdf_status = f"pdf_error: {e}"
+            pdf_path = None
+
+        # Email sending: prefer Mailgun if configured, otherwise SMTP if configured
+        email_status = ""
+        if email:
+            subject = f"{SCHOOL_NAME} — Report Card for {name}"
+            html_body = f"Dear Parent/Guardian,<br><br>Please find attached the report card for {name}.<br><br>Regards,<br>{SCHOOL_NAME}"
+
+            if MAILGUN_API_KEY and MAILGUN_DOMAIN and FROM_EMAIL:
+                try:
+                    code, text = send_email_mailgun(MAILGUN_API_KEY, MAILGUN_DOMAIN, FROM_EMAIL, email, subject, html_body, pdf_path)
+                    email_status = f"mailgun ({code})"
+                except Exception as e:
+                    email_status = f"mailgun_error: {e}"
+            elif SMTP_HOST and SMTP_USER and SMTP_PASS and FROM_EMAIL:
+                try:
+                    send_email_smtp(SMTP_HOST, SMTP_PORT, SMTP_USER, SMTP_PASS, SMTP_USE_TLS, FROM_EMAIL, email, subject, html_body, pdf_path)
+                    email_status = "smtp_sent"
+                except Exception as e:
+                    email_status = f"smtp_error: {e}"
+            else:
+                email_status = "no_email_config"
+        else:
+            email_status = "skipped"
+
+        # WhatsApp via Twilio (plain text)
+        whatsapp_status = ""
+        if twilio_client and phone:
+            try:
+                to_number = phone
+                if not to_number.startswith("+"):
+                    # assume teacher provided E.164; otherwise instruct to include +countrycode
+                    pass
+                twilio_resp = twilio_client.messages.create(
+                    body=f"Report: {name} — Total: {student['total_obtained']}/{student['total_max']} ({student['percentage']}). Please check your email for the report card. — {SCHOOL_NAME}",
+                    from_=TWILIO_WHATSAPP_FROM,
+                    to=f"whatsapp:{to_number}"
+                )
+                whatsapp_status = f"sent ({twilio_resp.sid})"
+            except Exception as e:
+                whatsapp_status = f"error: {e}"
+        else:
+            whatsapp_status = "skipped" if not phone else "no_twilio_config"
+
+        results.append({
+            "student_id": sid,
+            "student_name": name,
+            "pdf": pdf_path,
+            "pdf_status": pdf_status,
+            "email": email,
+            "email_status": email_status,
+            "phone": phone,
+            "whatsapp_status": whatsapp_status
+        })
+
+    # Create ZIP
+    zip_name = OUTPUT_DIR / f"reports_{timestamp}.zip"
+    with zipfile.ZipFile(zip_name, "w") as z:
+        for r in results:
+            if r["pdf"]:
+                z.write(r["pdf"], arcname=Path(r["pdf"]).name)
+
+    # Create delivery CSV
+    csv_path = OUTPUT_DIR / f"delivery_{timestamp}.csv"
+    with open(csv_path, "w", newline="", encoding="utf-8") as csvfile:
+        fieldnames = ["student_id", "student_name", "pdf", "pdf_status", "email", "email_status", "phone", "whatsapp_status"]
+        writer = csv.DictWriter(csvfile, fieldnames=fieldnames)
+        writer.writeheader()
+        for r in results:
+            writer.writerow(r)
+
+    return render_template("result.html", results=results, zipfile=zip_name.name, csvfile=csv_path.name)
+
+
+@app.route("/download/<path:filename>")
+def download(filename):
+    p = OUTPUT_DIR / filename
+    if not p.exists():
+        flash("File not found", "danger")
+        return redirect(url_for("index"))
+    return send_file(p, as_attachment=True)
+
+
+if __name__ == "__main__":
+    app.run(debug=True, host="0.0.0.0", port=5000)

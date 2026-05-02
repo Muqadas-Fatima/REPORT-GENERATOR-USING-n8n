@@ -1,0 +1,100 @@
+
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <title>Report: {{ student.student_name }}</title>
+  <style>
+    @font-face {
+      font-family: 'UrduFont';
+      src: url('/static/fonts/urdu_font.ttf') format('truetype');
+      /* Place a urdu font in static/fonts/urdu_font.ttf for better Urdu rendering */
+    }
+    body { font-family: DejaVu Sans, Arial, sans-serif; margin: 30px; color: #222; }
+    .header { text-align: center; margin-bottom: 20px; }
+    .logo { max-height: 80px; }
+    .student-info { margin-bottom: 20px; }
+    table { width: 100%; border-collapse: collapse; margin-bottom: 20px; }
+    th, td { border: 1px solid #ccc; padding: 8px; text-align: left; }
+    .english { direction: ltr; }
+    .urdu { direction: rtl; font-family: 'UrduFont', 'Noto Naskh Arabic', Arial, sans-serif; }
+    .small { font-size: 0.9em; color: #555; }
+  </style>
+</head>
+<body>
+  <div class="header">
+    {% if logo_url %}
+      <img src="{{ logo_url }}" class="logo" alt="School Logo"><br>
+    {% endif %}
+    <h2>{{ school_name }}</h2>
+    <div class="small">Report Card</div>
+  </div>
+
+  <div class="student-info">
+    <strong>Student ID:</strong> {{ student.student_id }} &nbsp; | &nbsp;
+    <strong>Name:</strong> {{ student.student_name }}
+  </div>
+
+  <div class="english">
+    <h3>Marks (English)</h3>
+    <table>
+      <thead>
+        <tr>
+          <th>Subject</th><th>Obtained</th><th>Max</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for sub, mark in student.subjects.items() %}
+        <tr>
+          <td>{{ sub }}</td>
+          <td>{{ mark }}</td>
+          <td>100</td>
+        </tr>
+        {% endfor %}
+        <tr>
+          <th>Total</th>
+          <th>{{ student.total_obtained }}</th>
+          <th>{{ student.total_max }}</th>
+        </tr>
+        <tr>
+          <th>Percentage</th>
+          <th colspan="2">{{ student.percentage }}</th>
+        </tr>
+      </tbody>
+    </table>
+  </div>
+
+  <div class="urdu">
+    <h3>نشانہ (اردو)</h3>
+    <table>
+      <thead>
+        <tr>
+          <th>مضمون</th><th>حاصل کردہ نمبر</th><th>زیادہ سے زیادہ</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for sub, mark in student.subjects.items() %}
+        <tr>
+          <td>{{ sub }}</td>
+          <td>{{ mark }}</td>
+          <td>100</td>
+        </tr>
+        {% endfor %}
+        <tr>
+          <th>کل</th>
+          <th>{{ student.total_obtained }}</th>
+          <th>{{ student.total_max }}</th>
+        </tr>
+        <tr>
+          <th>فیصد</th>
+          <th colspan="2">{{ student.percentage }}</th>
+        </tr>
+      </tbody>
+    </table>
+  </div>
+
+  <div class="small">
+    <p>Generated on {{ "%Y-%m-%d %H:%M" | format(datetime.datetime.now()) }}</p>
+  </div>
+</body>
+</html>
